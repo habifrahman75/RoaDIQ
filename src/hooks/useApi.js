@@ -34,3 +34,5 @@ export function useApi(fetchFn, deps = [], enabled = true) {
 
   return { data, loading, error, refetch: execute };
 }
+
+export default useApi;

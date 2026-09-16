@@ -4,10 +4,7 @@
 import { getStatusBadgeClass, STATUS_LABELS } from '../utils/helpers';
 
 export default function StatusBadge({ status }) {
-  if (!status) return <span className="badge" style={{ color: 'var(--color-text-muted)' }}>—</span>;
-  return (
-    <span className={getStatusBadgeClass(status)}>
-      {STATUS_LABELS[status] || status}
-    </span>
-  );
+  if (!status) return null;
+  const label = STATUS_LABELS[status] || status.replace(/_/g, ' ');
+  return <span className={getStatusBadgeClass(status)}>{label}</span>;
 }
