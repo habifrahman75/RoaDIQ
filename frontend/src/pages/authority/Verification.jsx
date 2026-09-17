@@ -69,25 +69,43 @@ function FileUpload({ onFileSelect, selectedFile, onClear }) {
 }
 
 function VerificationCard({ item }) {
-  const [uploadFile, setUploadFile] = useState(null);
+  const [afterImageUrl, setAfterImageUrl] = useState('');
+  const [beforeImageUrl, setBeforeImageUrl] = useState(item.before_image_url || item.before_url || item.evidence_url || '');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
 
+  // Also allow file selection for local preview (URL shown after selection)
+  const [uploadFile, setUploadFile] = useState(null);
+
+  const handleFileSelect = (file) => {
+    setUploadFile(file);
+    // In MVP, use a placeholder URL since we don't have a file storage service.
+    // In production, upload to S3/GCS and get back a URL.
+    setAfterImageUrl(`https://placehold.co/640x480?text=after-repair-${file.name.replace(/\s/g, '+')}`);
+  };
+
   const handleSubmit = async () => {
-    if (!uploadFile) {
-      toast.error('Please select an after-repair image or video.');
+    const reportId = item.report_id || item.id;
+    if (!reportId) {
+      toast.error('No report ID found for this verification.');
+      return;
+    }
+    if (!afterImageUrl) {
+      toast.error('Please select an after-repair image or enter an image URL.');
       return;
     }
     setSubmitting(true);
     try {
-      const formData = new FormData();
-      formData.append('file', uploadFile);
-      formData.append('repair_id', item.repair_id || item.id);
-      const res = await submitVerification(formData);
+      // Backend POST /api/verify-repair expects JSON: {report_id, before_image_url, after_image_url}
+      const res = await submitVerification({
+        report_id:        reportId,
+        before_image_url: beforeImageUrl || `https://placehold.co/640x480?text=before`,
+        after_image_url:  afterImageUrl,
+      });
       setResult(res);
-      toast.success('AI verification submitted! Processing…');
-    } catch {
-      toast.error('Verification submission failed. Please try again.');
+      toast.success('AI verification complete!');
+    } catch (err) {
+      toast.error(`Verification failed: ${err.message || 'Please try again.'}`);
     } finally {
       setSubmitting(false);
     }
@@ -136,50 +154,85 @@ function VerificationCard({ item }) {
       {!item.verified && !result && (
         <div>
           <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <Camera size={15} /> Upload After-Repair Evidence
+            <Camera size={15} /> After-Repair Evidence
           </h4>
+
+          {/* Option A: File upload (generates placeholder URL in MVP) */}
           <FileUpload
-            onFileSelect={setUploadFile}
+            onFileSelect={handleFileSelect}
             selectedFile={uploadFile}
-            onClear={() => setUploadFile(null)}
+            onClear={() => { setUploadFile(null); setAfterImageUrl(''); }}
           />
+
+          {/* Option B: Paste image URL directly */}
+          <div style={{ margin: '0.75rem 0 0.25rem 0', fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
+            — or paste the after-repair image URL directly —
+          </div>
+          <input
+            type="url"
+            placeholder="https://example.com/after-repair.jpg"
+            value={afterImageUrl}
+            onChange={e => setAfterImageUrl(e.target.value)}
+            style={{
+              width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8,
+              border: '1px solid var(--color-border)', background: 'var(--color-background)',
+              color: 'var(--color-text-primary)', fontSize: '0.85rem', outline: 'none',
+              boxSizing: 'border-box', marginBottom: '0.5rem',
+            }}
+          />
+
           <div style={{ marginTop: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <button
               onClick={handleSubmit}
-              disabled={submitting || !uploadFile}
+              disabled={submitting || !afterImageUrl}
               style={{
                 padding: '0.6rem 1.25rem', background: 'var(--color-primary)',
                 color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600,
-                fontSize: '0.85rem', cursor: submitting || !uploadFile ? 'not-allowed' : 'pointer',
-                opacity: submitting || !uploadFile ? 0.6 : 1,
+                fontSize: '0.85rem', cursor: submitting || !afterImageUrl ? 'not-allowed' : 'pointer',
+                opacity: submitting || !afterImageUrl ? 0.6 : 1,
                 display: 'flex', alignItems: 'center', gap: '0.45rem'
               }}
             >
               <CheckCircle size={15} />
-              {submitting ? 'Submitting…' : 'Submit for AI Verification'}
+              {submitting ? 'Running AI Verification…' : 'Submit for AI Verification'}
             </button>
             <p style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', margin: 0 }}>
-              AI analysis will run on FastAPI backend
+              AI analysis runs on FastAPI → AI microservice
             </p>
           </div>
         </div>
       )}
 
-      {/* Success Result */}
+      {/* AI Verification Result */}
       {result && (
-        <div style={{ marginTop: '1rem', padding: '0.875rem', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 10 }}>
+        <div style={{
+          marginTop: '1rem', padding: '0.875rem',
+          background: result.verified ? 'rgba(34,197,94,0.08)' : 'rgba(249,115,22,0.08)',
+          border: `1px solid ${result.verified ? 'rgba(34,197,94,0.25)' : 'rgba(249,115,22,0.25)'}`,
+          borderRadius: 10
+        }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-            <CheckCircle size={16} color="#22c55e" />
-            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: '#22c55e' }}>Verification Submitted</span>
+            <CheckCircle size={16} color={result.verified ? '#22c55e' : '#f97316'} />
+            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: result.verified ? '#22c55e' : '#f97316' }}>
+              {result.verified ? '✓ Repair Verified' : '⚠ Verification Required'}
+            </span>
+            {result.confidence != null && (
+              <span style={{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginLeft: 'auto' }}>
+                Confidence: {Math.round(result.confidence * 100)}%
+              </span>
+            )}
           </div>
-          <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', margin: 0 }}>
-            The AI is analyzing the after-repair evidence. Results will be available shortly.
-          </p>
+          {result.notes && (
+            <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.5 }}>
+              {result.notes}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
 }
+
 
 export default function Verification() {
   const { data: verificationData, loading, error, refetch } = useApi(() => getVerifications());

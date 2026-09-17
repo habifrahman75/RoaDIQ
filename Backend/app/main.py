@@ -2,9 +2,8 @@
 RoadIQ Backend – app/main.py
 
 FastAPI application entry point.
-
-Start the server from the backend/ directory with:
-    uvicorn app.main:app --reload
+Start from the Backend/ directory:
+    uvicorn app.main:app --reload --port 8000
 """
 
 from fastapi import FastAPI, Request
@@ -16,8 +15,10 @@ import sys
 
 from app.config import settings
 from app.database.mongodb import connect_db, close_db
-from app.routes import dashboard, reports, roads, priority, repairs, verification
-
+from app.routes import (
+    dashboard, reports, roads, priority, repairs, verification,
+    analytics, notifications, contributors, recurring,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -31,11 +32,11 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Lifespan (startup / shutdown)
+# Lifespan
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("RoadIQ backend starting …")
+    logger.info("RoadIQ backend starting...")
     await connect_db()
     yield
     await close_db()
@@ -43,7 +44,7 @@ async def lifespan(app: FastAPI):
 
 
 # ---------------------------------------------------------------------------
-# App instance
+# App
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="RoadIQ API",
@@ -58,9 +59,8 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-
 # ---------------------------------------------------------------------------
-# CORS – configurable via ALLOWED_ORIGINS env var
+# CORS
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
@@ -72,7 +72,7 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Global error handlers
+# Global error handler
 # ---------------------------------------------------------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -89,22 +89,24 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(dashboard.router)
 app.include_router(reports.router)
 app.include_router(roads.router)
+app.include_router(roads.router_alias)   # /api/roads alias
 app.include_router(priority.router)
 app.include_router(repairs.router)
 app.include_router(verification.router)
+app.include_router(analytics.router)
+app.include_router(notifications.router)
+app.include_router(contributors.router)
+app.include_router(recurring.router)
 
 
 # ---------------------------------------------------------------------------
-# Health check
+# Health & Root
 # ---------------------------------------------------------------------------
 @app.get("/health", tags=["Health"])
 async def health_check():
     return {"status": "ok", "service": "RoadIQ Backend", "version": "1.0.0"}
 
 
-# ---------------------------------------------------------------------------
-# Root
-# ---------------------------------------------------------------------------
 @app.get("/", tags=["Root"])
 async def root():
     return {

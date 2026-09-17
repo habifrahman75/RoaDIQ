@@ -65,12 +65,17 @@ export const getReport = async (id) => {
   return client.get(`/api/reports/${id}`);
 };
 
-export const submitReport = async (formData) => {
+export const submitReport = async (reportData) => {
   if (USE_MOCK) {
     await delay(800);
     return { success: true, report_id: 'RIQ-1060', message: 'Report submitted for AI analysis' };
   }
-  return client.post('/api/reports', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+  // Backend POST /api/reports expects JSON (ReportCreate schema)
+  // If a FormData is passed, send as multipart; otherwise send as JSON
+  if (reportData instanceof FormData) {
+    return client.post('/api/reports', reportData);
+  }
+  return client.post('/api/reports', reportData);
 };
 
 export const analyzeReport = async (evidenceData) => {
@@ -78,7 +83,9 @@ export const analyzeReport = async (evidenceData) => {
     await delay(2200);
     return mock.newSubmissionAIResult;
   }
-  return client.post('/api/reports/analyze', evidenceData, { headers: { 'Content-Type': 'multipart/form-data' } });
+  // Pass FormData directly — do NOT set Content-Type manually.
+  // Axios auto-sets multipart/form-data with the correct boundary.
+  return client.post('/api/reports/analyze', evidenceData);
 };
 
 export const updateReportStatus = async (id, status) => {
@@ -157,9 +164,19 @@ export const updateRepairStatus = async (id, status) => {
 };
 
 // ── Repair Verification ────────────────────────────────────────────────────────
-export const submitVerification = async (formData) => {
+export const submitVerification = async (payload) => {
+  // payload = { report_id, before_image_url, after_image_url } (JSON)
+  // or a legacy FormData from older UI code — we normalise to JSON here.
   if (USE_MOCK) { await delay(2000); return mock.verificationResult; }
-  return client.post('/api/verify-repair', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+  let body = payload;
+  if (payload instanceof FormData) {
+    body = {
+      report_id:        payload.get('report_id') || payload.get('repair_id') || '',
+      before_image_url: payload.get('before_image_url') || '',
+      after_image_url:  payload.get('after_image_url')  || '',
+    };
+  }
+  return client.post('/api/verify-repair', body);
 };
 
 export const getVerifications = async () => {

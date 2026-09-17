@@ -1,0 +1,73 @@
+# Root .gitignore — RoadIQ
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env.local
+
+# ── Environment / Secrets ─────────────────────────────────────────────────────
+# NEVER commit .env files — they may contain credentials
+.env
+.env.local
+.env.production
+
+# Keep .env.example files (they contain no secrets)
+!.env.example
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+
+# ── AI / Models ───────────────────────────────────────────────────────────────
+# Do NOT commit large YOLO model files
+ai/models/*.pt
+ai/models/*.onnx
+ai/models/*.engine
+ai/test_images/
+*.pt
+*.onnx
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Uploads (dev artefacts) ───────────────────────────────────────────────────
+uploads/
+*.jpg
+*.jpeg
+*.png
+!docs/*.png
+!public/*.png
+!public/*.svg
+!src/assets/
+
+# ── pytest / coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

@@ -1,40 +1,66 @@
 """
 RoadIQ Backend – app/routes/reports.py
 
-POST /api/reports        – Submit a new damage report
-GET  /api/reports        – List reports (with filters + pagination)
-GET  /api/reports/{id}   – Single report detail
+POST /api/reports          – Submit a new damage report (JSON body)
+POST /api/reports/analyze  – Upload image for AI detection (multipart)
+GET  /api/reports          – List reports with filters + pagination
+GET  /api/reports/{id}     – Single report detail
 PUT  /api/reports/{id}/status – Update repair status
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from bson import ObjectId
-from bson.errors import InvalidId
+import httpx
+import logging
 from datetime import datetime, timezone
 from typing import Optional
-import logging
 
+from bson import ObjectId
+from bson.errors import InvalidId
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status,
+)
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
+from app.config import settings
 from app.database.mongodb import get_db
 from app.schemas.report import (
-    ReportCreate,
-    ReportResponse,
-    ReportListResponse,
-    ReportStatusUpdate,
-    ReportStatus,
+    ReportCreate, ReportListResponse, ReportResponse,
+    ReportStatus, ReportStatusUpdate,
 )
 from app.services.priority_service import calculate_priority_score
 
 router = APIRouter(prefix="/api/reports", tags=["Reports"])
 logger = logging.getLogger(__name__)
 
+# Dev-mock AI result returned when the AI service is unreachable
+_DEV_MOCK_RESULT = {
+    "damage_detected": True,
+    "detections": [
+        {
+            "damage_type": "pothole",
+            "confidence":  0.87,
+            "severity":    "HIGH",
+            "bbox":        [80, 100, 420, 360],
+        }
+    ],
+    "_source": "DEV_MOCK – AI service unavailable. Set AI_SERVICE_URL in .env.",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _oid(report_id: str) -> ObjectId:
+    try:
+        return ObjectId(report_id)
+    except InvalidId:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid report ID format: '{report_id}'",
+        )
+
+
 def _to_response(doc: dict) -> ReportResponse:
-    """Convert a raw MongoDB document to a ReportResponse."""
     return ReportResponse(
         id=str(doc["_id"]),
         damage_type=doc["damage_type"],
@@ -51,14 +77,53 @@ def _to_response(doc: dict) -> ReportResponse:
     )
 
 
-def _valid_object_id(report_id: str) -> ObjectId:
-    try:
-        return ObjectId(report_id)
-    except InvalidId:
+# ---------------------------------------------------------------------------
+# POST /api/reports/analyze  (must be registered BEFORE /{id} routes)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/analyze",
+    summary="Upload road image for AI damage detection",
+)
+async def analyze_image(
+    image:     UploadFile = File(..., description="Road image (JPEG or PNG)"),
+    latitude:  float      = Form(0.0),
+    longitude: float      = Form(0.0),
+):
+    """
+    Forwards the uploaded image to the AI microservice (port 8001).
+    Falls back to a clearly-labelled dev-mock if the AI service is not running.
+    """
+    if not image.content_type or not image.content_type.startswith("image/"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid report ID format: '{report_id}'",
+            status_code=422,
+            detail=f"File must be an image. Received: {image.content_type}",
         )
+
+    image_bytes = await image.read()
+    if len(image_bytes) == 0:
+        raise HTTPException(status_code=422, detail="Uploaded image is empty.")
+
+    ai_url = f"{settings.AI_SERVICE_URL}/detect"
+    logger.info("Forwarding image to AI service: %s", ai_url)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                ai_url,
+                files={"image": (image.filename, image_bytes, image.content_type)},
+                data={"latitude": str(latitude), "longitude": str(longitude)},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    except httpx.ConnectError:
+        logger.warning("AI service unreachable at %s – returning dev-mock.", ai_url)
+        return _DEV_MOCK_RESULT
+
+    except httpx.HTTPStatusError as exc:
+        logger.error("AI service error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"AI service error: {exc.response.status_code}")
 
 
 # ---------------------------------------------------------------------------
@@ -75,13 +140,11 @@ async def create_report(
     payload: ReportCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    # Count existing reports on the same segment (for frequency-based priority)
     report_count = 1
     if payload.road_segment_id:
         report_count = await db["reports"].count_documents(
             {"road_segment_id": payload.road_segment_id}
-        )
-        report_count += 1  # include the one being created
+        ) + 1
 
     priority_result = calculate_priority_score(
         severity=payload.severity.value,
@@ -92,17 +155,16 @@ async def create_report(
 
     now = datetime.now(timezone.utc)
     doc = {
-        "damage_type":      payload.damage_type.value,
-        "confidence":       payload.confidence,
-        "severity":         payload.severity.value,
-        "latitude":         payload.latitude,
-        "longitude":        payload.longitude,
-        "image_url":        payload.image_url,
-        "road_segment_id":  payload.road_segment_id,
-        "priority_score":   priority_result["priority_score"],
-        "priority_reason":  priority_result["reason"],
-        "status":           ReportStatus.PENDING.value,
-        # GeoJSON point for geospatial queries
+        "damage_type":     payload.damage_type.value,
+        "confidence":      payload.confidence,
+        "severity":        payload.severity.value,
+        "latitude":        payload.latitude,
+        "longitude":       payload.longitude,
+        "image_url":       payload.image_url,
+        "road_segment_id": payload.road_segment_id,
+        "priority_score":  priority_result["priority_score"],
+        "priority_reason": priority_result["reason"],
+        "status":          ReportStatus.PENDING.value,
         "location": {
             "type": "Point",
             "coordinates": [payload.longitude, payload.latitude],
@@ -114,7 +176,6 @@ async def create_report(
     result = await db["reports"].insert_one(doc)
     doc["_id"] = result.inserted_id
 
-    # If a road segment is referenced, update its damage count
     if payload.road_segment_id:
         await db["road_segments"].update_one(
             {"segment_id": payload.road_segment_id},
@@ -123,7 +184,7 @@ async def create_report(
                 "$push": {
                     "recent_reports": {
                         "$each": [str(result.inserted_id)],
-                        "$slice": -5,           # keep last 5
+                        "$slice": -5,
                     }
                 },
                 "$set": {"updated_at": now},
@@ -145,56 +206,36 @@ async def create_report(
     summary="List damage reports with optional filters and pagination",
 )
 async def list_reports(
-    severity:    Optional[str] = Query(None, description="Filter by severity: LOW, MEDIUM, HIGH, CRITICAL"),
-    damage_type: Optional[str] = Query(None, description="Filter by damage type"),
-    status:      Optional[str] = Query(None, description="Filter by status"),
-    page:        int           = Query(1, ge=1, description="Page number (1-indexed)"),
-    limit:       int           = Query(20, ge=1, le=100, description="Results per page"),
+    severity:    Optional[str] = Query(None),
+    damage_type: Optional[str] = Query(None),
+    status:      Optional[str] = Query(None),
+    page:        int           = Query(1, ge=1),
+    limit:       int           = Query(20, ge=1, le=100),
     db:          AsyncIOMotorDatabase = Depends(get_db),
 ):
     query: dict = {}
 
     if severity:
-        severity_upper = severity.upper()
-        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
-        if severity_upper not in valid:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid severity. Allowed: {sorted(valid)}",
-            )
-        query["severity"] = severity_upper
+        s = severity.upper()
+        if s not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+            raise HTTPException(status_code=422, detail=f"Invalid severity: {severity}")
+        query["severity"] = s
 
     if damage_type:
-        valid_dt = {
-            "pothole", "longitudinal_crack", "transverse_crack",
-            "alligator_crack", "damaged_road",
-        }
+        valid_dt = {"pothole", "longitudinal_crack", "transverse_crack", "alligator_crack", "damaged_road"}
         if damage_type.lower() not in valid_dt:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid damage_type. Allowed: {sorted(valid_dt)}",
-            )
+            raise HTTPException(status_code=422, detail=f"Invalid damage_type: {damage_type}")
         query["damage_type"] = damage_type.lower()
 
     if status:
         valid_st = {s.value for s in ReportStatus}
         if status.upper() not in valid_st:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid status. Allowed: {sorted(valid_st)}",
-            )
+            raise HTTPException(status_code=422, detail=f"Invalid status: {status}")
         query["status"] = status.upper()
 
     skip = (page - 1) * limit
     total = await db["reports"].count_documents(query)
-    cursor = (
-        db["reports"]
-        .find(query)
-        .sort("created_at", -1)
-        .skip(skip)
-        .limit(limit)
-    )
-    docs = await cursor.to_list(length=limit)
+    docs = await db["reports"].find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(length=limit)
 
     return ReportListResponse(
         total=total,
@@ -217,13 +258,9 @@ async def get_report(
     report_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    oid = _valid_object_id(report_id)
-    doc = await db["reports"].find_one({"_id": oid})
+    doc = await db["reports"].find_one({"_id": _oid(report_id)})
     if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Report '{report_id}' not found.",
-        )
+        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found.")
     return _to_response(doc)
 
 
@@ -241,28 +278,17 @@ async def update_report_status(
     payload:   ReportStatusUpdate,
     db:        AsyncIOMotorDatabase = Depends(get_db),
 ):
-    oid = _valid_object_id(report_id)
+    oid = _oid(report_id)
     now = datetime.now(timezone.utc)
 
-    update_fields: dict = {
-        "status":     payload.status.value,
-        "updated_at": now,
-    }
+    update_fields: dict = {"status": payload.status.value, "updated_at": now}
     if payload.notes:
         update_fields["notes"] = payload.notes
 
-    result = await db["reports"].update_one(
-        {"_id": oid},
-        {"$set": update_fields},
-    )
-
+    result = await db["reports"].update_one({"_id": oid}, {"$set": update_fields})
     if result.matched_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Report '{report_id}' not found.",
-        )
+        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found.")
 
-    # Create / update the repair record when status changes
     if payload.status.value in ("ASSIGNED", "UNDER_REPAIR", "RESOLVED"):
         repair_update: dict = {
             "report_id": report_id,
@@ -281,5 +307,5 @@ async def update_report_status(
         )
 
     doc = await db["reports"].find_one({"_id": oid})
-    logger.info("Report %s status → %s", report_id, payload.status.value)
+    logger.info("Report %s status -> %s", report_id, payload.status.value)
     return _to_response(doc)

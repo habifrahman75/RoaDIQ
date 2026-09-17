@@ -493,17 +493,31 @@ export default function ReportForm() {
     setIsAnalyzing(true);
 
     try {
-      const result = await analyzeReport({ evidenceType, file });
+      // Build FormData so the real backend receives multipart/form-data
+      // (api.js mock path ignores this and returns mock data regardless)
+      let evidencePayload;
+      if (file && file instanceof File) {
+        const fd = new FormData();
+        fd.append('image', file, file.name);
+        fd.append('latitude',  String(location.lat  || 0.0));
+        fd.append('longitude', String(location.lng || 0.0));
+        evidencePayload = fd;
+      } else {
+        // Fallback for mock mode where file may be null
+        evidencePayload = { evidenceType, file };
+      }
+
+      const result = await analyzeReport(evidencePayload);
       // For photo evidence, nullify video-only stats
       if (evidenceType === 'photo') {
-        result.frames_analyzed     = null;
+        result.frames_analyzed       = null;
         result.frames_with_detection = null;
       }
       setAiResult(result);
       setSubmitted(true);
       toast.success('Report submitted & AI analyzed!');
     } catch (err) {
-      toast.error('AI analysis failed. Please try again.');
+      toast.error(`AI analysis failed: ${err.message || 'Please try again.'}`);
     } finally {
       setIsAnalyzing(false);
     }

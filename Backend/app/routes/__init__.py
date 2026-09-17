@@ -1,5 +1,10 @@
 # app/routes/__init__.py
-# Exposes all route modules so main.py can import them cleanly.
-from app.routes import dashboard, reports, roads, priority, repairs, verification
+from app.routes import (
+    dashboard, reports, roads, priority, repairs, verification,
+    analytics, notifications, contributors, recurring,
+)
 
-__all__ = ["dashboard", "reports", "roads", "priority", "repairs", "verification"]
+__all__ = [
+    "dashboard", "reports", "roads", "priority", "repairs", "verification",
+    "analytics", "notifications", "contributors", "recurring",
+]

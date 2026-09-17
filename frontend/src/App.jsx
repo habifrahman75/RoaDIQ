@@ -33,6 +33,14 @@ import ContribReports     from './pages/contributor/MyReports';
 import ContribImpact      from './pages/contributor/Impact';
 import ContribNotifications from './pages/contributor/Notifications';
 
+// ── Role → Dashboard helper ───────────────────────────────────────────────────
+/** Returns the home route for a canonical role, or /login for unknown. */
+function roleDashboard(role) {
+  if (role === 'authority')   return '/authority/dashboard';
+  if (role === 'contributor') return '/contributor/dashboard';
+  return '/login';
+}
+
 // ── Protected Layout ──────────────────────────────────────────────────────────
 function ProtectedLayout({ requiredRole }) {
   const { isAuthenticated, user } = useAuth();
@@ -51,10 +59,18 @@ function ProtectedLayout({ requiredRole }) {
     setTimeout(() => setRefreshLoading(false), 600);
   }, []);
 
+  // Not logged in → /login
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (requiredRole && user?.role !== requiredRole) {
-    // Redirect to the correct dashboard for their role
-    return <Navigate to={user?.role === 'authority' ? '/authority/dashboard' : '/contributor/dashboard'} replace />;
+
+  // Unknown / null role → /login (prevents blank screen)
+  const userRole = user?.role;
+  if (!userRole || (userRole !== 'authority' && userRole !== 'contributor')) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // Logged in but wrong role → redirect to their own dashboard
+  if (requiredRole && userRole !== requiredRole) {
+    return <Navigate to={roleDashboard(userRole)} replace />;
   }
 
   return (
@@ -71,9 +87,11 @@ function ProtectedLayout({ requiredRole }) {
 // ── Root redirect ─────────────────────────────────────────────────────────────
 function RootRedirect() {
   const { isAuthenticated, user } = useAuth();
+  // No session → /login
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (user?.role === 'contributor') return <Navigate to="/contributor/dashboard" replace />;
-  return <Navigate to="/authority/dashboard" replace />;
+  // Unknown role → /login (never blank screen)
+  const dest = roleDashboard(user?.role);
+  return <Navigate to={dest} replace />;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────

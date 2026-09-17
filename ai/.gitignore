@@ -1,0 +1,29 @@
+# ai/.gitignore
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment secrets — NEVER commit
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# YOLO model files (large binary files — share via drive/release, not git)
+models/*.pt
+models/*.onnx
+models/*.torchscript
+
+# Ultralytics run artifacts
+runs/
+*.yaml
+
+# OS artifacts
+.DS_Store
+Thumbs.db
